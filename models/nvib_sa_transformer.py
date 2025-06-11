@@ -286,7 +286,6 @@ class NVIBSaTransformer(Transformer):
         The memory ones are interesting. I use memory_key_padding_mask to mask the tokens in the latent space.
 
         """
-        # TEMPORARY: Check if forward is being called with debugging - DELETE AFTER USE
 
         src_key_padding_mask = ~(attention_mask.bool())
         tgt_key_padding_mask = decoder_input_ids.transpose(0, 1) == self.pad_token_id
@@ -321,7 +320,6 @@ class NVIBSaTransformer(Transformer):
             # latent_dict=self_attention_latent[-1],
         )  # [B,Nl]
 
-        # TEMPORARY: Add backward hook to check gradients - DELETE AFTER USE
         return {
             "logits": output,  # [Nt, B, V]
             "encoder_attentions": encoder_attention,  # Self attention

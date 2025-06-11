@@ -433,48 +433,48 @@ class Seq2SeqLightning(pl.LightningModule):
         batch["decoder_input_ids"] = batch["decoder_input_ids"].transpose(0, 1)
 
         # Plot attention
-        if self.plot_cross_attention:
-            if batch_idx == 0:
-                # Only the first batch and the first item of the batch
-                for i in range(0, 3):
-                    batch_item = i
-                    # Plot attention
-                    show_attention(
-                        batch,
-                        batch_item,
-                        self.tokenizer,
-                        model_outputs,
-                        "cross_attentions",
-                        self.logger,
-                        "Test",
-                        zmax=1,
-                        # prior="<PRIOR>" if self.is_nvib else None,
-                        num_heads=self.model.nhead,
-                        num_layers=self.model.num_decoder_layers,
-                        batch_idx=batch_idx,
-                        observation=batch_item,
-                    )
-        if self.plot_encoder_attention:
-            if batch_idx == 0:
-                # Only the first batch and the first item of the batch
-                for i in range(0, 3):
-                    batch_item = i
-                    # Plot attention
-                    show_attention(
-                        batch,
-                        batch_item,
-                        self.tokenizer,
-                        model_outputs,
-                        "encoder_attentions",
-                        self.logger,
-                        "Test",
-                        zmax=1,
-                        prior="<PRIOR>" if self.is_nvib else None,
-                        num_heads=self.model.nhead,
-                        num_layers=self.model.num_encoder_layers,
-                        batch_idx=batch_idx,
-                        observation=batch_item,
-                    )
+        # if self.plot_cross_attention:
+        #     if batch_idx == 0:
+        #         # Only the first batch and the first item of the batch
+        #         for i in range(0, 3):
+        #             batch_item = i
+        #             # Plot attention
+        #             show_attention(
+        #                 batch,
+        #                 batch_item,
+        #                 self.tokenizer,
+        #                 model_outputs,
+        #                 "cross_attentions",
+        #                 self.logger,
+        #                 "Test",
+        #                 zmax=1,
+        #                 # prior="<PRIOR>" if self.is_nvib else None,
+        #                 num_heads=self.model.nhead,
+        #                 num_layers=self.model.num_decoder_layers,
+        #                 batch_idx=batch_idx,
+        #                 observation=batch_item,
+        #             )
+        # if self.plot_encoder_attention:
+        #     if batch_idx == 0:
+        #         # Only the first batch and the first item of the batch
+        #         for i in range(0, 3):
+        #             batch_item = i
+        #             # Plot attention
+        #             show_attention(
+        #                 batch,
+        #                 batch_item,
+        #                 self.tokenizer,
+        #                 model_outputs,
+        #                 "encoder_attentions",
+        #                 self.logger,
+        #                 "Test",
+        #                 zmax=1,
+        #                 prior="<PRIOR>" if self.is_nvib else None,
+        #                 num_heads=self.model.nhead,
+        #                 num_layers=self.model.num_encoder_layers,
+        #                 batch_idx=batch_idx,
+        #                 observation=batch_item,
+        #             )
 
         return {
             "preds": batch_predictions,
