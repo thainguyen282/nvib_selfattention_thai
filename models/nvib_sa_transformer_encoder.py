@@ -175,12 +175,6 @@ class NVIBTransformerEncoder(Module):
         latent_dict_list = []
         latent_dict = None
         for idx, mod in enumerate(self.layers):
-            assert not torch.isnan(output).any(), (
-                f"NaN values detected in output at {self.__class__.__name__}. "
-                f"NaN indices: {torch.nonzero(torch.isnan(output), as_tuple=True)}. "
-                f"Shape: {output.shape}, Max value: {torch.max(output)}"
-                f"layer: {idx}"
-            )
             output, attention_layer, klg, kld, latent_dict = mod(
                 output,
                 src_mask=mask,

@@ -239,10 +239,6 @@ class Seq2SeqLightning(pl.LightningModule):
         logits = torch.flatten(model_outputs["logits"], start_dim=0, end_dim=1)  # [Nt x B, V]
         # Calculates loss
         cross_entropy_loss = criterion(logits, targets)  # [Nt x B]
-        assert not torch.isnan(cross_entropy_loss).any(), (
-            f"NaN detected in cross_entropy_loss. "
-            f"logits shape: {logits.shape}, max: {torch.max(logits)}, min: {torch.min(logits)}"
-        )
 
         if self.is_nvib:
             kl_factor = self.kl_annealing_scheduler(self.global_step)
@@ -291,6 +287,8 @@ class Seq2SeqLightning(pl.LightningModule):
             batch["input_ids"],
             max_new_tokens=256,
         )
+        prompt = self.tokenizer.batch_decode(batch["input_ids"].transpose(0, 1))
+        # prompt = strip_after_token(prompt, self.tokenizer.sep_token)
         batch_predictions = self.tokenizer.batch_decode(generated_ids.transpose(0, 1))
         batch_predictions = strip_after_token(batch_predictions, self.tokenizer.sep_token)
         tgt = self.tokenizer.batch_decode(batch["labels"])
@@ -348,7 +346,7 @@ class Seq2SeqLightning(pl.LightningModule):
             "cross_entropy_loss": cross_entropy_loss,
         }
 
-    def validation_epoch_end(self, validation_step_outputs):
+    def validation_epoch_end(self, validation_step_outputs):                                        
         # Calculate score
         preds = []
         targets = []

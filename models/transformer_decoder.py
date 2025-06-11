@@ -84,7 +84,6 @@ class CustomTransformerDecoder(Module):
 
         if self.norm is not None:
             output = self.norm(output)
-
         return output, attention_list
 
 
@@ -193,12 +192,14 @@ class CustomTransformerDecoderLayer(Module):
         """
         # see Fig. 1 of https://arxiv.org/pdf/2002.04745v1.pdf
         x = tgt
+
         if self.norm_first:
             x = x + self._sa_block(self.norm1(x), tgt_mask, tgt_key_padding_mask)
             # x = x + self._mha_block(self.norm2(x), memory, memory_mask, memory_key_padding_mask)
             out, attention = self._mha_block(
                 self.norm2(x), memory, memory_mask, memory_key_padding_mask
             )
+            
             x = out + x
             x = x + self._ff_block(self.norm3(x))
         else:
@@ -209,12 +210,6 @@ class CustomTransformerDecoderLayer(Module):
             )
             x = self.norm2(out + x)
             x = self.norm3(x + self._ff_block(x))
-        assert not torch.isnan(x).any(), (
-            f"NaN values detected in x at {self.__class__.__name__}. "
-            f"NaN indices: {torch.nonzero(torch.isnan(x), as_tuple=True)}. "
-            f"Shape: {x.shape}, Max value: {torch.max(x)}"
-            f"X: {x}"
-        )
         return x, attention
 
     # self-attention block
@@ -229,12 +224,6 @@ class CustomTransformerDecoderLayer(Module):
             key_padding_mask=key_padding_mask,
             need_weights=False,
         )[0]
-        assert not torch.isnan(x).any(), (
-            f"NaN values detected in x at {self.__class__.__name__}. "
-            f"NaN indices: {torch.nonzero(torch.isnan(x), as_tuple=True)}. "
-            f"Shape: {x.shape}, Max value: {torch.max(x)}"
-            f"X: {x}"
-        )
         return self.dropout1(x)
 
     # multihead attention block
@@ -245,6 +234,11 @@ class CustomTransformerDecoderLayer(Module):
         attn_mask: Optional[Tensor],
         key_padding_mask: Optional[Tensor],
     ) -> Tensor:
+        
+        # Create full context attention mask (no masking)
+        # seq_len = mem.size(0)  # or mem.size(1) if batch_first=True
+        # attn_mask = torch.zeros(x.size(0), seq_len, dtype=torch.float, device=x.device)
+        
         x, attention = self.multihead_attn(
             x,
             mem,

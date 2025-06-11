@@ -413,7 +413,9 @@ class CustomTransformerEncoderLayer(Module):
                 self.norm1(x), src_mask, src_key_padding_mask
             )
             x = x + out
-            x = x + self._sa_block(self.norm1(x), src_mask, src_key_padding_mask)
+            out, attention = self._sa_block(self.norm1(x), src_mask, src_key_padding_mask)
+            x = x + out
+            # x = x + self._sa_block(self.norm1(x), src_mask, src_key_padding_mask)
             x = x + self._ff_block(self.norm2(x))
         else:
             out, attention = self._sa_block(x, src_mask, src_key_padding_mask)
