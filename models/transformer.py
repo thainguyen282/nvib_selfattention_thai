@@ -55,22 +55,31 @@ def shift_tokens_right(
 def init_weights(model):
     for name, param in model.named_parameters():
         if "bias" in name:
-            torch.nn.init.zeros_(param)
+            if "alpha_proj" in name:
+                # Initialize alpha projection bias to positive values
+                # This ensures log_alpha starts positive, so alpha = exp(log_alpha) > 1.0
+                torch.nn.init.constant_(param, 1.0)  # exp(1.0) ≈ 2.7 >> 0.1
+            else:
+                torch.nn.init.zeros_(param)
         elif "weight" in name:
             if param.dim() > 1:
                 if "embedding" in name:
                     # Use normal distribution for embeddings
                     torch.nn.init.normal_(param, mean=0.0, std=0.02)
-                elif "nvib_layer" in name:
-                    if "alpha_proj" in name:
-                        # Initialize alpha projection with small values
-                        torch.nn.init.uniform_(param, -0.01, 0.01)
-                    elif "mu_proj" in name:
-                        # Initialize mu projection with identity-like matrix
-                        torch.nn.init.eye_(param)
-                    elif "logvar_proj" in name:
-                        # Initialize logvar projection with small negative values
-                        torch.nn.init.constant_(param, -1.0)
+                elif "nvib_layer" in name and "alpha_proj" in name:
+                    # Initialize alpha projection weights to reasonable scale
+                    # Use Xavier but with positive bias toward larger values
+                    torch.nn.init.xavier_uniform_(param)
+                    # Add small positive bias to weights to encourage larger alpha
+                    with torch.no_grad():
+                        param += 0.1  # Small positive bias
+                elif "mu_proj" in name:
+                    # Initialize mu projection with identity-like matrix  
+                    torch.nn.init.eye_(param)
+                elif "logvar_proj" in name:
+                    # Initialize logvar projection with small values for stable variances
+                    torch.nn.init.xavier_uniform_(param)
+                    torch.nn.init.constant_(param, 0.0)  # Start with unit variance (exp(0) = 1)
                 else:
                     # Xavier uniform for other weights
                     torch.nn.init.xavier_uniform_(param)

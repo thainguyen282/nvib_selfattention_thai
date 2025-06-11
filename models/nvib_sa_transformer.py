@@ -71,6 +71,7 @@ class NVIBSaTransformer(Transformer):
             dim_feedforward=self.dim_feedforward,
             dropout=self.dropout,
             activation="relu",
+            norm_first=True,
         )
 
         # NVIB Transformer encoder layer
@@ -98,6 +99,7 @@ class NVIBSaTransformer(Transformer):
             self.nhead,
             self.dim_feedforward,
             self.dropout,
+            norm_first=True,
         )
         decoder_norm = nn.LayerNorm(self.d_model, eps=1e-5)
         self.decoder = CustomTransformerDecoder(
@@ -119,50 +121,22 @@ class NVIBSaTransformer(Transformer):
         :param src_key_padding_mask: Trues where to mask [B,Ns]
         :return: memory: [Ns,B,H]
         """
-        assert not torch.isnan(src).any(), (
-            f"NaN values detected in src at {self.__class__.__name__}. "
-            f"NaN indices: {torch.nonzero(torch.isnan(src), as_tuple=True)}. "
-            f"Shape: {src.shape}, Max value: {torch.max(src)}"
-            f"Src: {src}"
-        )
-        assert not torch.isnan(self.embedding.weight).any(), (
-            f"NaN values detected in embedding weights at {self.__class__.__name__}. "
-            f"NaN indices: {torch.nonzero(torch.isnan(self.embedding.weight), as_tuple=True)}. "
-            f"Shape: {self.embedding.weight.shape}, Max value: {torch.max(self.embedding.weight)}"
-            f"Embedding weights: {self.embedding.weight}"
-        )
-        temp = self.embedding(src)
-        assert not torch.isnan(temp).any(), (
-            f"NaN values detected in temp at {self.__class__.__name__}. "
-            f"NaN indices: {torch.nonzero(torch.isnan(temp), as_tuple=True)}. "
-            f"Shape: {temp.shape}, Max value: {torch.max(temp)}"
-            f"Temp: {temp}"
-        )
-        embedded = self.drop(temp)  # [Ns,B,H]
-        assert not torch.isnan(embedded).any(), (
-            f"NaN values detected in embedded at {self.__class__.__name__}. "
-            f"NaN indices: {torch.nonzero(torch.isnan(embedded), as_tuple=True)}. "
-            f"Shape: {embedded.shape}, Max value: {torch.max(embedded)}"
-            f"Embedded: {embedded}"
-        )
-            
-        src = self.positional_encoding(embedded)  # [Ns,B,H]
-        
+        # Add position encodings + Embeddings
+        src = self.positional_encoding(self.drop(self.embedding(src)))  # [Ns,B,H]
+
         # Transformer encoder
         memory1, attention1 = self.encoder(
             src, src_key_padding_mask=src_key_padding_mask
         )  # [Ns,B,H]
-        # print("Number of layers in memory1:", len(memory1))
-        # for i, layer_output in enumerate(memory1):
-        #     print(f"Layer {i} output shape:", layer_output.shape)
+
         # NVIB Transformer encoder
-        # take memory[-1] since memory1 store all output of each layer
         memory2, attention2, klg, kld, latent_dict = self.nvib_transformer_encoder(
             memory1[-1], src_key_padding_mask=src_key_padding_mask
         )  # [Ns,B,H]
         # Concatenate the attention lists
         attention = attention1 + attention2
         return memory2, attention, klg, kld, latent_dict, memory1
+
 
     def decode(
         self, tgt, z, memory_key_padding_mask, tgt_key_padding_mask, *args, **kwargs
@@ -190,16 +164,16 @@ class NVIBSaTransformer(Transformer):
             tgt.device
         )  # [Nt, Nt]
         
+        # Debug: Log attention mask shapes
+        print(f"Debug - tgt_mask shape: {tgt_mask.shape}")
+        if tgt_key_padding_mask is not None:
+            print(f"Debug - tgt_key_padding_mask shape: {tgt_key_padding_mask.shape}")
+        if memory_key_padding_mask is not None:
+            print(f"Debug - memory_key_padding_mask shape: {memory_key_padding_mask.shape}")
+        
         # Normalize and bound memory input
         z = F.layer_norm(z, [z.size(-1)])
         z = 100 * torch.tanh(z / 100)  # Smooth bound to [-100, 100]
-
-        assert not torch.isnan(z).any(), (
-            f"NaN values detected in z before decoder layer at {self.__class__.__name__}. "
-            f"NaN indices: {torch.nonzero(torch.isnan(z), as_tuple=True)}. "
-            f"Shape: {z.shape}, Max value: {torch.max(z)}"
-            f"Z: {z}"
-        )
         
         output, attention = self.decoder(
             tgt=tgt,  # [Nt,B,H]
@@ -208,12 +182,6 @@ class NVIBSaTransformer(Transformer):
             tgt_key_padding_mask=tgt_key_padding_mask,  # [B,Nt]
             memory_key_padding_mask=memory_key_padding_mask,
         )  # [B,Nl]
-        assert not torch.isnan(output).any(), (
-            f"NaN values detected in output after decoder layer at {self.__class__.__name__}. "
-            f"NaN indices: {torch.nonzero(torch.isnan(output), as_tuple=True)}. "
-            f"Shape: {output.shape}, Max value: {torch.max(output)}"
-            f"Output: {output}"
-        )
         # Normalize decoder output
         output = F.layer_norm(output, [output.size(-1)])
         
@@ -318,15 +286,10 @@ class NVIBSaTransformer(Transformer):
         The memory ones are interesting. I use memory_key_padding_mask to mask the tokens in the latent space.
 
         """
-        # Reformat the attention mask
+        # TEMPORARY: Check if forward is being called with debugging - DELETE AFTER USE
+
         src_key_padding_mask = ~(attention_mask.bool())
         tgt_key_padding_mask = decoder_input_ids.transpose(0, 1) == self.pad_token_id
-        assert not torch.isnan(input_ids).any(), (
-            f"NaN values detected in input_ids at {self.__class__.__name__}. "
-            f"NaN indices: {torch.nonzero(torch.isnan(input_ids), as_tuple=True)}. "
-            f"Shape: {input_ids.shape}, Max value: {torch.max(input_ids)}"
-            f"Input ids: {input_ids}"
-        )
         # Encode
         (
             memory,
@@ -338,25 +301,18 @@ class NVIBSaTransformer(Transformer):
         ) = self.encode(
             input_ids, src_key_padding_mask=src_key_padding_mask
         )  # [Ns,B,H]
-        assert not torch.isnan(memory).any(), (
-            f"NaN values detected in memory after encode at {self.__class__.__name__}. "
-            f"Shape: {memory.shape}, Max value: {torch.max(memory)}"
-        )
+        
         # Mask the src_key_padding_mask with the final latent layer's pi for cross attention
-        src_key_padding_mask = src_key_padding_mask + self_attention_latent[-1][
-            "alpha"
-        ].squeeze(-1).transpose(0, 1)[:, 1:].le(0.1)
+        alpha_mask =  self_attention_latent[-1]["alpha"].squeeze(-1).transpose(0, 1)[:, 1:] .le(0.1)  # Boolean mask where alpha <= 0.1
+        # src_key_padding_mask = src_key_padding_mask + alpha_mask
 
         # Soft weighting of vectors
         # memory = memory * self_attention_latent[-1]["pi"][1:, :, :]
 
         # latent layer
         latent_output_dict = self.latent_layer(memory, src_key_padding_mask)
+
         # Decode
-        assert not torch.isnan(latent_output_dict["z"]).any(), (
-            f"NaN values detected in latent_output_dict['z'] at {self.__class__.__name__}. "
-            f"Shape: {latent_output_dict['z'].shape}, Max value: {torch.max(latent_output_dict['z'])}"
-        )
         output, decoder_attention = self.decode(
             tgt=decoder_input_ids,  # [Nt,B,H]
             z=latent_output_dict["z"],  # [Nl,B,H]
@@ -364,11 +320,8 @@ class NVIBSaTransformer(Transformer):
             memory_key_padding_mask=latent_output_dict["memory_key_padding_mask"],
             # latent_dict=self_attention_latent[-1],
         )  # [B,Nl]
-        assert not torch.isnan(output).any(), (
-            f"NaN values detected in output decode at {self.__class__.__name__}. "
-            f"Shape: {output.shape}, Max value: {torch.max(output)}"
-        )
 
+        # TEMPORARY: Add backward hook to check gradients - DELETE AFTER USE
         return {
             "logits": output,  # [Nt, B, V]
             "encoder_attentions": encoder_attention,  # Self attention
@@ -390,7 +343,7 @@ class NVIBSaTransformerLightning(Seq2SeqLightning):
 
         # Model
         self.model = NVIBSaTransformer(tokenizer=self.tokenizer, **vars(args))
-
+        
         # Nvib
         self.lambda_klg = args.klg_lambda
         self.lambda_kld = args.kld_lambda

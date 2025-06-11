@@ -10,6 +10,7 @@ import argparse
 import os
 from datetime import datetime
 
+import torch
 import pytorch_lightning as pl
 from dotenv import load_dotenv
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
@@ -18,7 +19,7 @@ from pytorch_lightning.loggers import WandbLogger
 from data_modules.ReconstructionDataModule import ReconstructionDataModule, load_prepared_data
 from models.nvib_sa_transformer import NVIBSaTransformerLightning
 from models.transformer import TransformerLightning
-from utils import *
+from utils import get_checkpoint_path, create_or_load_model, strip_after_token
 
 # Stops an annoying warning from transformers
 # You're using a BertTokenizerFast tokenizer. Please note that with a fast tokenizer, using the `__call__` method is faster than using a method to encode the text followed by a call to the `pad` method to get a padded encoding.
@@ -42,67 +43,83 @@ def main(args):
     # Instantiate or load model
     model, wandb_id = create_or_load_model(OUTPUT_PATH, CHECKPOINT_PATH, model, args)
 
+    # Move model to GPU if available and set to evaluation mode
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device)
+    model.eval()
+    
+    # Ensure all model parameters are on the same device
+    def move_to_device_recursive(module, device):
+        for name, param in module.named_parameters():
+            if param.device != device:
+                print(f"Moving parameter {name} from {param.device} to {device}")
+                param.data = param.data.to(device)
+        for name, buffer in module.named_buffers():
+            if buffer.device != device:
+                print(f"Moving buffer {name} from {buffer.device} to {device}")
+                buffer.data = buffer.data.to(device)
+    
+    move_to_device_recursive(model, device)
+    print(f"Model moved to device: {device}")
+
     # Make data module
     dm = ReconstructionDataModule(model, **dict_args)
-    # data_loader = load_prepared_data(
-    #     tokenizer=dm.tokenizer,
-    #     name="train",
-    #     data_name=dm.data,
-    #     model_name=dm.model_name,
-    # )
-    # for batch in data_loader:
-    #     print(batch)
-    #     break
-
-    # Checkpointing callbacks
-    checkpoint_callback = ModelCheckpoint(
-        dirpath=OUTPUT_PATH,
-        every_n_train_steps=args.checkpoint_interval,
-        save_top_k=-1,
+    data_loader = load_prepared_data(
+        tokenizer=dm.tokenizer,
+        name="test",
+        data_name=dm.data,
+        model_name=dm.model_name,
     )
-    bestmodel_callback = ModelCheckpoint(
-        monitor="val_loss",
-        mode="min",
-        every_n_train_steps=args.checkpoint_interval,
-        dirpath=OUTPUT_PATH,
-        filename="best_model",
-    )
-    lr_monitor = LearningRateMonitor(logging_interval="step")
+    for batch in data_loader:
+        usedbatch = batch
+        # Convert to tensor and ensure correct shape [sequence_length, batch_size]
+        input_ids = torch.tensor(usedbatch["input_ids"])
+        labels = torch.tensor(usedbatch["labels"])
+        
+        # If batch_size=1, we need to ensure the tensor is 2D
+        if input_ids.dim() == 1:
+            input_ids = input_ids.unsqueeze(1)  # [seq_len, 1]
+        if labels.dim() == 1:
+            labels = labels.unsqueeze(1)  # [seq_len, 1]
+        
+        # Move tensors to the same device as the model
+        device = next(model.parameters()).device
+        input_ids = input_ids.to(device)
+        labels = labels.to(device)
+            
+        usedbatch["input_ids"] = input_ids
+        usedbatch["labels"] = labels
+        usedbatch["decoder_input_ids"] = labels
+        break
+    # text = "homarus gammarus, known as the european lobster or common lobster, is a species of clawed lobster from the eastern atlantic "
+    # prompt = model.tokenizer(text, truncation=True, max_length=256, return_tensors="pt")
+    # prompt = prompt.to(device)
+    # input_ids = prompt['input_ids']
+    # usedbatch["input_ids"] = input_ids.to(device)
+    # usedbatch["labels"] = input_ids.to(device)
+    # usedbatch["decoder_input_ids"] = prompt.to(device)
+    
+    # Run inference without gradient computation
+    with torch.no_grad():
+        generated_ids = model.model.generate(
+                usedbatch["input_ids"],
+                max_new_tokens=256,
+            )
+        prompt = model.tokenizer.batch_decode(usedbatch["input_ids"].transpose(0, 1))
+        prompt = strip_after_token(prompt, model.tokenizer.sep_token)
+        batch_predictions = model.tokenizer.batch_decode(generated_ids.transpose(0, 1))
+        batch_predictions = strip_after_token(batch_predictions, model.tokenizer.sep_token)
+        tgt = model.tokenizer.batch_decode(usedbatch["labels"])
+        # tgt = strip_after_token(tgt, model.tokenizer.sep_token)
 
-    # WandB logger
-    wandb_logger = WandbLogger(
-        project=args.project_name, entity=args.entity, id=wandb_id, log_model="None"
-    )
+        # Make batch first for plotting
+        usedbatch["input_ids"] = usedbatch["input_ids"].transpose(0, 1)
+        print(f"stop here: {prompt}")
+        print(f"input_ids: {usedbatch['input_ids']}")
+        print(f"batch_predictions: {batch_predictions}")
+        print(f"tgt: {tgt}")
 
-    # Trainer
-    trainer = pl.Trainer.from_argparse_args(
-        args,
-        # limit_train_batches=0.1,
-        # limit_val_batches=0.01,
-        # limit_test_batches=0.1,
-        # overfit_batches=1,
-        # deterministic=True,
-        accelerator="auto",
-        gradient_clip_val=0.1,
-        precision=16 if args.fp16 else 32,
-        accumulate_grad_batches=args.accumulate_grad_batches,
-        val_check_interval=args.validation_interval,
-        callbacks=[checkpoint_callback, bestmodel_callback, lr_monitor],
-        logger=wandb_logger,
-        num_sanity_val_steps=0,
-        fast_dev_run=args.fast_dev_run,
-    )
-
-    # Train model
-    print("Start of training:", (datetime.now().replace(microsecond=0) - START_TIME))
-    trainer.fit(model=model, datamodule=dm, ckpt_path=CHECKPOINT_PATH)
-    print("End of training:", (datetime.now().replace(microsecond=0) - START_TIME))
-
-    # Dev set evaluation
-    trainer.validate(model=model, datamodule=dm)
-
-    # Test set evaluation
-    trainer.test(model=model, datamodule=dm)
+    exit()
 
 
 if __name__ == "__main__":
